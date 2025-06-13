@@ -1,25 +1,16 @@
 provider "aws" {
-  region = var.region
+  region = var.aws_region
 }
 
-data "aws_vpc" "default" {
-  default = true
+# 🔑 Upload local public key to AWS
+resource "aws_key_pair" "hynux_key" {
+  key_name   = var.key_pair_name
+  public_key = file("${path.module}/${var.public_key_file}")
 }
 
-data "aws_subnet" "default" {
-  filter {
-    name   = "default-for-az"
-    values = ["true"]
-  }
-  filter {
-    name   = "availability-zone"
-    values = ["${var.region}a"]
-  }
-}
-
+# 🔍 Get latest Debian 12 AMI
 data "aws_ami" "debian" {
   most_recent = true
-  owners      = ["136693071363"]
 
   filter {
     name   = "name"
@@ -30,18 +21,20 @@ data "aws_ami" "debian" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
+
+  owners = ["136693071363"]  # Debian official AMI publisher
 }
 
+# 🌐 Create Security Group allowing SSH
 resource "aws_security_group" "hynux_sg" {
   name        = "hynux-sg"
-  description = "Allow SSH"
-  vpc_id      = data.aws_vpc.default.id
+  description = "Allow SSH inbound"
 
   ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"]  # You may restrict this
   }
 
   egress {
@@ -52,17 +45,20 @@ resource "aws_security_group" "hynux_sg" {
   }
 }
 
-resource "aws_eip" "static_ip" {
-  vpc = true
+# 🔍 Default subnet
+data "aws_subnet" "default" {
+  default_for_az = true
+  availability_zone = "${var.aws_region}a"
 }
 
+# 🖥️ Create EC2 instance
 resource "aws_instance" "hynux" {
   ami                         = data.aws_ami.debian.id
-  instance_type               = "t2.micro"
+  instance_type               = var.instance_type
   subnet_id                   = data.aws_subnet.default.id
-  key_name                    = var.key_name
-  associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.hynux_sg.id]
+  key_name                    = aws_key_pair.hynux_key.key_name
+  associate_public_ip_address = true
 
   root_block_device {
     volume_size = 20
@@ -72,9 +68,4 @@ resource "aws_instance" "hynux" {
   tags = {
     Name = "hynux"
   }
-}
-
-resource "aws_eip_association" "eip_assoc" {
-  instance_id   = aws_instance.hynux.id
-  allocation_id = aws_eip.static_ip.id
 }
