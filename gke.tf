@@ -1,105 +1,80 @@
-provider "google" {
-  project = "custom-altar-455808-t3"
-  region  = "us-central1"
-  zone    = "us-central1-c"
+provider "aws" {
+  region = var.region
 }
 
-# ✅ Create a Service Account for GKE Nodes
-resource "google_service_account" "gke_service_account" {
-  account_id   = "gke-service-account"
-  display_name = "GKE Service Account"
+data "aws_vpc" "default" {
+  default = true
 }
 
-# ✅ Grant IAM role to GKE Service Account
-resource "google_project_iam_member" "gke_service_account_role" {
-  project = "custom-altar-455808-t3"
-  role    = "roles/container.clusterViewer"
-  member  = "serviceAccount:${google_service_account.gke_service_account.email}"
-}
-
-# ✅ GKE Cluster (Zonal)
-resource "google_container_cluster" "gke_standard" {
-  name                     = "hynux-gke-cluster"
-  location                 = "us-central1-c"
-  remove_default_node_pool = true
-  initial_node_count       = 1
-
-  # 🔻 Disable deletion protection
-  deletion_protection = false
-
-  networking_mode = "VPC_NATIVE"
-  ip_allocation_policy {}
-
-  logging_config {
-    enable_components = ["SYSTEM_COMPONENTS", "WORKLOADS"]
+data "aws_subnet" "default" {
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
   }
-
-  monitoring_config {
-    enable_components = ["SYSTEM_COMPONENTS"]
-  }
-
-  private_cluster_config {
-    enable_private_nodes    = true
-    master_ipv4_cidr_block  = "172.16.0.0/28"
-  }
-
-  release_channel {
-    channel = "REGULAR"
+  filter {
+    name   = "availability-zone"
+    values = ["${var.region}a"]
   }
 }
 
-# ✅ Primary Node Pool
-resource "google_container_node_pool" "primary_nodes" {
-  name       = "primary-node-pool"
-  location   = "us-central1-c"
-  cluster    = google_container_cluster.gke_standard.name
-  node_count = 1
+data "aws_ami" "debian" {
+  most_recent = true
+  owners      = ["136693071363"]
 
-  node_config {
-    machine_type = "e2-standard-4"
-    disk_size_gb = 10
-    disk_type    = "pd-balanced"
-    service_account = google_service_account.gke_service_account.email
-
-    oauth_scopes = [
-      "https://www.googleapis.com/auth/cloud-platform"
-    ]
-
-    workload_metadata_config {
-      mode = "MODE_UNSPECIFIED"
-    }
+  filter {
+    name   = "name"
+    values = ["debian-12-amd64-*"]
   }
 
-  autoscaling {
-    min_node_count = 1
-    max_node_count = 3
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
   }
 }
 
-# ✅ Special Node Pool (for high-memory workloads)
-resource "google_container_node_pool" "special_nodes" {
-  name       = "special-node-pool"
-  location   = "us-central1-c"
-  cluster    = google_container_cluster.gke_standard.name
-  node_count = 0  # Start with zero nodes
+resource "aws_security_group" "hynux_sg" {
+  name        = "hynux-sg"
+  description = "Allow SSH"
+  vpc_id      = data.aws_vpc.default.id
 
-  node_config {
-    machine_type = "n1-highmem-2"
-    disk_size_gb = 10
-    disk_type    = "pd-balanced"
-    service_account = google_service_account.gke_service_account.email
-
-    oauth_scopes = [
-      "https://www.googleapis.com/auth/cloud-platform"
-    ]
-
-    workload_metadata_config {
-      mode = "MODE_UNSPECIFIED"
-    }
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  autoscaling {
-    min_node_count = 0
-    max_node_count = 5
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
+}
+
+resource "aws_eip" "static_ip" {
+  vpc = true
+}
+
+resource "aws_instance" "hynux" {
+  ami                         = data.aws_ami.debian.id
+  instance_type               = "t2.micro"
+  subnet_id                   = data.aws_subnet.default.id
+  key_name                    = var.key_name
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.hynux_sg.id]
+
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+  }
+
+  tags = {
+    Name = "hynux"
+  }
+}
+
+resource "aws_eip_association" "eip_assoc" {
+  instance_id   = aws_instance.hynux.id
+  allocation_id = aws_eip.static_ip.id
 }
