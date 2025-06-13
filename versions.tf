@@ -9,10 +9,10 @@ terraform {
   }
 
   backend "remote" {
-    organization = "your-tfc-org-name"
+    organization = "YLH"
 
     workspaces {
-      name = "your-workspace-name"
+      name = "hynux_terraform"
     }
   }
 }
